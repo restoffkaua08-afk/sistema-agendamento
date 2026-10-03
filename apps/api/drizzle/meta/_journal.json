@@ -1,0 +1,9 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    { "idx": 0, "version": "7", "when": 1790985600000, "tag": "0000_initial", "breakpoints": true },
+    { "idx": 1, "version": "7", "when": 1790985601000, "tag": "0001_safe_reservation_guards", "breakpoints": true },
+    { "idx": 2, "version": "7", "when": 1790985602000, "tag": "0002_booking_rate_limits", "breakpoints": true }
+  ]
+}
