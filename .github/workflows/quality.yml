@@ -1,0 +1,76 @@
+name: Quality gates
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+    inputs:
+      mobile_web_url:
+        description: HTTPS URL of the deployed owner dashboard for a debug APK
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Typecheck, API tests and web build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Run API tests
+        run: >-
+          npm run test --workspace @agenda/api --
+          api/index.test.ts
+          src/auth.test.ts
+          src/domain/availability.test.ts
+          src/domain/booking-rate-limit.test.ts
+          src/server.cors.test.ts
+      - run: npm run build:web
+
+  android-debug:
+    name: Build installable Android debug APK
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      MOBILE_WEB_URL: ${{ inputs.mobile_web_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Validate dashboard URL
+        run: |
+          if [[ ! "$MOBILE_WEB_URL" =~ ^https://[^[:space:]]+$ ]]; then
+            echo "mobile_web_url must be a complete HTTPS URL."
+            exit 1
+          fi
+      - name: Install Android SDK platform
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - run: npm ci
+      - name: Sync Capacitor Android project
+        run: npm run cap:sync --workspace @agenda/mobile -- android
+      - name: Assemble debug APK
+        working-directory: apps/mobile/android
+        run: bash ./gradlew --no-daemon assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trindade-agenda-android-debug
+          path: apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14

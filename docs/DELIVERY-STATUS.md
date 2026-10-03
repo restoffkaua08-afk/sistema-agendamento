@@ -33,6 +33,7 @@
 - Sem API configurada em produção, a tela não exibe catálogo/horários demonstrativos; tentativas repetidas com os mesmos dados reutilizam `Idempotency-Key` e erros de limite, backend e horário são apresentados separadamente.
 - A confirmação deixou de afirmar que um e-mail foi enviado; envio real por e-mail/push continua pendente.
 - Diário Drizzle adicionado e validado como JSON; a configuração exige `DATABASE_URL` e falha claramente se estiver ausente. A migração não foi aplicada porque não há banco configurado neste ambiente.
+- Workflow GitHub Actions versionado para typecheck, testes da API e build web em PRs/pushes; despacho manual separado pode gerar APK debug somente a partir de URL HTTPS informada. Esse APK não é assinatura de produção.
 - `git diff --check`: passou; apenas avisos de conversão de fim de linha do Git.
 
 ## Ainda não comprovado para publicação comercial
@@ -42,6 +43,7 @@
 - Teste concorrente real contra PostgreSQL remoto.
 - Push Android com aplicativo fechado; a fila existe, mas worker/FCM ainda não foi conectado.
 - APK/AAB assinado e instalado em aparelho real; o ambiente atual não possui Java/Android SDK.
+- Primeira execução verde do workflow de qualidade e primeiro APK debug compilado no CI; não há Actions run validado após adicionar o workflow.
 - Backup/restauração, observabilidade e teste de carga.
 
 ## Regra de verdade
@@ -60,4 +62,4 @@ O endpoint em memória de `apps/web/app/api/public/[slug]/appointments/route.ts`
 - Publicação e operação: ~10% — configuração e documentação para Vercel/Supabase existem, mas não houve deploy real, teste concorrente remoto, monitoramento ou ensaio de backup/restauração.
 - Materialização para cada cliente: pendente — configurar identidade, catálogo, horários, contato, políticas e credenciais reais antes de vender cada implantação.
 
-O percentual só deve subir após evidência verificável dos itens pendentes. Próximo: aplicar e testar a migração do limite contra PostgreSQL/Supabase, depois validar Vercel/Supabase e concluir push + APK assinado.
+O percentual só deve subir após evidência verificável dos itens pendentes. Próximo: validar a execução do workflow, aplicar e testar a migração contra PostgreSQL/Supabase reais, depois validar Vercel/Supabase e concluir push + APK assinado.
