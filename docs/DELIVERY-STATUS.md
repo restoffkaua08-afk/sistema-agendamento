@@ -15,15 +15,18 @@
 - Manifesto e service worker iniciais para a experiência PWA.
 - Base Capacitor para empacotar o mesmo produto em Android.
 - Documentação de arquitetura segura, Supabase/Vercel, operação e plano comercial.
+- Painel do proprietário agora permite consultar, cadastrar, editar e publicar/desativar serviços, incluindo descrição, duração, intervalo, preço e profissionais associados; alterações persistidas em transação e registradas na auditoria.
+- Auditoria de serviço registra os campos completos na criação e snapshots `before`/`after` (incluindo profissionais) na edição; a edição bloqueia a linha do serviço durante a transação para manter o snapshot coerente. Typecheck da API passou.
 
 ## Verificações executadas
 
 - TypeScript da API: passou.
 - Build de produção do site: passou nesta rodada, incluindo checagem de tipos do Next.js.
-- Testes da API: 14 passaram (autenticação/perfis, disponibilidade e fuso/DST, CORS, rotas Vercel, limites de agenda e rate limit).
+- Testes da API: a reexecução agregada atual passou 14 casos; `api/index.test.ts` e `server.cors.test.ts` encerraram por falta de memória antes de executar os casos. Os dois arquivos passaram quando executados separadamente (2/2 cada); não restaram falhas de asserção, mas o runner agregado ainda precisa de mais memória para fechar verde.
 - Autorização do painel agora verifica o papel atual na associação do banco; proprietário e gerente podem gerir, recepção não.
 - Agenda converte horários locais pelo fuso do estabelecimento, inclusive transições de horário de verão.
-- CORS permite `Authorization` e `PATCH`, necessários para o painel.
+- CORS permite `Authorization`, `PATCH` e `PUT`, necessários para as operações do painel.
+- O caso de serviço desativado sem profissional associado não executa consulta `IN` nem `INSERT` em lote com lista vazia; associações só são verificadas e gravadas quando há profissionais selecionados.
 - Painel permite escolher a data, atualizar manualmente e renovar dados periodicamente.
 - API Vercel agora reescreve `/v1/*` para a função e recupera o caminho original antes de encaminhar ao Fastify.
 - Slug e nome do tenant no site/painel são configuráveis por `NEXT_PUBLIC_TENANT_SLUG` e `NEXT_PUBLIC_TENANT_NAME`, evitando o slug fixo `marca` em cada implantação.
@@ -44,6 +47,7 @@
 - Push Android com aplicativo fechado; a fila existe, mas worker/FCM ainda não foi conectado.
 - APK/AAB assinado e instalado em aparelho real; o ambiente atual não possui Java/Android SDK.
 - Primeira execução verde do workflow de qualidade e primeiro APK debug compilado no CI; não há Actions run validado após adicionar o workflow.
+- Testes integrados de criação/edição de serviços contra PostgreSQL/Supabase; a validação atual cobre parsing e CORS, não persistência remota nem isolamento entre tenants em banco real.
 - Backup/restauração, observabilidade e teste de carga.
 
 ## Regra de verdade

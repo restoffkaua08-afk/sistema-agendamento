@@ -27,5 +27,6 @@ test("owner panel preflight permits bearer auth and status updates", async () =>
   assert.equal(response.headers["access-control-allow-origin"], "https://agenda.example");
   assert.match(String(response.headers["access-control-allow-headers"]), /authorization/i);
   assert.match(String(response.headers["access-control-allow-methods"]), /patch/i);
+  assert.match(String(response.headers["access-control-allow-methods"]), /put/i);
   await app.close();
 });

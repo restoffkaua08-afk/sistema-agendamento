@@ -33,6 +33,7 @@ jobs:
           src/auth.test.ts
           src/domain/availability.test.ts
           src/domain/booking-rate-limit.test.ts
+          src/domain/service-settings.test.ts
           src/server.cors.test.ts
       - run: npm run build:web
 

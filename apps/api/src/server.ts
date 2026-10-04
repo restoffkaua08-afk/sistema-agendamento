@@ -7,6 +7,7 @@ import { auditEvents, memberships, users } from "./db/schema.js";
 import { canManageTenant, signSession, verifyPassword, verifySession } from "./auth.js";
 import { CONTRACT_VERSION, localDateTimeToInstant } from "@agenda/contracts";
 import { bookingClientAddress, bookingClientIpHash, bookingRateWindow, RATE_LIMIT_MAX_ATTEMPTS, loginClientIpHash } from "./domain/booking-rate-limit.js";
+import { isUuid, parseServiceSettings } from "./domain/service-settings.js";
 
 export const app = Fastify({ logger: true });
 const database = createDatabase();
@@ -51,6 +52,7 @@ function idempotencyHeader(value: string | string[] | undefined): string | undef
 function bearerToken(value: string | string[] | undefined): string | undefined { const header = idempotencyHeader(value); return header?.startsWith("Bearer ") ? header.slice(7) : undefined; }
 function isLoginInput(value: unknown): value is LoginInput { if (!value || typeof value !== "object") return false; const input = value as Partial<LoginInput>; return typeof input.email === "string" && typeof input.password === "string" && typeof input.tenantSlug === "string"; }
 function isStatusInput(value: unknown): value is StatusInput { if (!value || typeof value !== "object") return false; const status = (value as Partial<StatusInput>).status; return status === "confirmed" || status === "cancelled" || status === "completed" || status === "no_show"; }
+function isUniqueViolation(error: unknown): boolean { return Boolean(error && typeof error === "object" && "code" in error && error.code === "23505"); }
 export function localDateBounds(date: string, timeZone: string): { startsAt: Date; endsAt: Date } | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   const day = new Date(`${date}T00:00:00.000Z`);
@@ -83,7 +85,7 @@ function addCorsHeaders(request: { headers: Record<string, string | string[] | u
   const allowed = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((item) => item.trim()).filter(Boolean);
   if (origin && (allowed.includes("*") || allowed.includes(origin as string))) reply.header("Access-Control-Allow-Origin", origin as string);
   reply.header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key");
-  reply.header("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
+  reply.header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, OPTIONS");
   reply.header("Vary", "Origin");
 }
 
@@ -170,6 +172,102 @@ app.patch<{ Params: { slug: string; id: string }; Body: unknown }>("/v1/owner/:s
     return result;
   });
   return reply.send({ appointment: updated });
+});
+
+app.get<{ Params: { slug: string } }>("/v1/owner/:slug/services", async (request, reply) => {
+  const access = await ownerTenant(request, reply);
+  if (!access || !database) return;
+  const serviceRows = await database.db.select({ id: services.id, name: services.name, description: services.description, durationMinutes: services.durationMinutes, bufferMinutes: services.bufferMinutes, priceCents: services.priceCents, active: services.active }).from(services).where(eq(services.tenantId, access.tenant.id));
+  const staffRows = await database.db.select({ id: staff.id, name: staff.name }).from(staff).where(and(eq(staff.tenantId, access.tenant.id), eq(staff.active, true)));
+  const serviceIds = serviceRows.map((item) => item.id);
+  const links = serviceIds.length ? await database.db.select({ serviceId: staffServices.serviceId, staffId: staffServices.staffId }).from(staffServices).where(inArray(staffServices.serviceId, serviceIds)) : [];
+  return reply.send({ services: serviceRows.map((item) => ({ ...item, staffIds: links.filter((link) => link.serviceId === item.id).map((link) => link.staffId) })), staff: staffRows });
+});
+
+app.post<{ Params: { slug: string }; Body: unknown }>("/v1/owner/:slug/services", async (request, reply) => {
+  const access = await ownerTenant(request, reply);
+  if (!access || !database) return;
+  const input = parseServiceSettings(request.body);
+  if (!input) return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Revise os dados do serviço e selecione ao menos um profissional ativo." });
+  const assignedStaff = input.staffIds.length ? await database.db.select({ id: staff.id }).from(staff)
+    .where(and(eq(staff.tenantId, access.tenant.id), eq(staff.active, true), inArray(staff.id, input.staffIds))) : [];
+  if (assignedStaff.length !== input.staffIds.length) return reply.code(400).send({ code: "INVALID_STAFF", message: "Selecione somente profissionais ativos deste estabelecimento." });
+  try {
+    const created = await database.db.transaction(async (tx) => {
+      const [service] = await tx.insert(services).values({
+        tenantId: access.tenant.id,
+        name: input.name,
+        description: input.description,
+        durationMinutes: input.durationMinutes,
+        bufferMinutes: input.bufferMinutes,
+        priceCents: input.priceCents,
+        active: input.active
+      }).returning({ id: services.id, name: services.name, description: services.description, durationMinutes: services.durationMinutes, bufferMinutes: services.bufferMinutes, priceCents: services.priceCents, active: services.active });
+      if (input.staffIds.length) await tx.insert(staffServices).values(input.staffIds.map((staffId) => ({ serviceId: service.id, staffId })));
+      await tx.insert(auditEvents).values({
+        tenantId: access.tenant.id,
+        actorUserId: access.session.userId,
+        action: "service.created",
+        entityType: "service",
+        entityId: service.id,
+        metadata: { name: service.name, description: service.description, durationMinutes: service.durationMinutes, bufferMinutes: service.bufferMinutes, priceCents: service.priceCents, active: service.active, staffIds: input.staffIds }
+      });
+      return service;
+    });
+    return reply.code(201).send({ service: { ...created, staffIds: input.staffIds } });
+  } catch (error) {
+    if (isUniqueViolation(error)) return reply.code(409).send({ code: "SERVICE_NAME_EXISTS", message: "Já existe um serviço com esse nome." });
+    request.log.error(error);
+    return reply.code(500).send({ code: "SERVICE_SAVE_FAILED", message: "Não foi possível salvar o serviço." });
+  }
+});
+
+app.put<{ Params: { slug: string; id: string }; Body: unknown }>("/v1/owner/:slug/services/:id", async (request, reply) => {
+  const access = await ownerTenant(request, reply);
+  if (!access || !database) return;
+  if (!isUuid(request.params.id)) return reply.code(400).send({ code: "INVALID_ID", message: "Serviço inválido." });
+  const input = parseServiceSettings(request.body);
+  if (!input) return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Revise os dados do serviço e selecione ao menos um profissional ativo." });
+  const assignedStaff = input.staffIds.length ? await database.db.select({ id: staff.id }).from(staff)
+    .where(and(eq(staff.tenantId, access.tenant.id), eq(staff.active, true), inArray(staff.id, input.staffIds))) : [];
+  if (assignedStaff.length !== input.staffIds.length) return reply.code(400).send({ code: "INVALID_STAFF", message: "Selecione somente profissionais ativos deste estabelecimento." });
+  try {
+    const updated = await database.db.transaction(async (tx) => {
+      const [before] = await tx.select({ id: services.id, name: services.name, description: services.description, durationMinutes: services.durationMinutes, bufferMinutes: services.bufferMinutes, priceCents: services.priceCents, active: services.active }).from(services)
+        .where(and(eq(services.id, request.params.id), eq(services.tenantId, access.tenant.id))).limit(1).for("update");
+      if (!before) return null;
+      const previousStaff = await tx.select({ staffId: staffServices.staffId }).from(staffServices).where(eq(staffServices.serviceId, before.id));
+      const [service] = await tx.update(services).set({
+        name: input.name,
+        description: input.description,
+        durationMinutes: input.durationMinutes,
+        bufferMinutes: input.bufferMinutes,
+        priceCents: input.priceCents,
+        active: input.active
+      }).where(and(eq(services.id, before.id), eq(services.tenantId, access.tenant.id)))
+        .returning({ id: services.id, name: services.name, description: services.description, durationMinutes: services.durationMinutes, bufferMinutes: services.bufferMinutes, priceCents: services.priceCents, active: services.active });
+      await tx.delete(staffServices).where(eq(staffServices.serviceId, before.id));
+      if (input.staffIds.length) await tx.insert(staffServices).values(input.staffIds.map((staffId) => ({ serviceId: before.id, staffId })));
+      await tx.insert(auditEvents).values({
+        tenantId: access.tenant.id,
+        actorUserId: access.session.userId,
+        action: "service.updated",
+        entityType: "service",
+        entityId: before.id,
+        metadata: {
+          before: { name: before.name, description: before.description, durationMinutes: before.durationMinutes, bufferMinutes: before.bufferMinutes, priceCents: before.priceCents, active: before.active, staffIds: previousStaff.map((item) => item.staffId) },
+          after: { name: service.name, description: service.description, durationMinutes: service.durationMinutes, bufferMinutes: service.bufferMinutes, priceCents: service.priceCents, active: service.active, staffIds: input.staffIds }
+        }
+      });
+      return service;
+    });
+    if (!updated) return reply.code(404).send({ code: "NOT_FOUND", message: "Serviço não encontrado." });
+    return reply.send({ service: { ...updated, staffIds: input.staffIds } });
+  } catch (error) {
+    if (isUniqueViolation(error)) return reply.code(409).send({ code: "SERVICE_NAME_EXISTS", message: "Já existe um serviço com esse nome." });
+    request.log.error(error);
+    return reply.code(500).send({ code: "SERVICE_SAVE_FAILED", message: "Não foi possível salvar o serviço." });
+  }
 });
 
 app.get<{ Params: { slug: string }; Querystring: { staffId?: string } }>("/v1/public/:slug/appointments", async (request, reply) => {
