@@ -29,7 +29,7 @@ export function bookingClientAddress(
   return validAddress(chain?.[chain.length - 1]);
 }
 
-export function scopedClientIpHash(scope: "booking" | "login", address: string, sessionSecret: string | undefined): string | null {
+export function scopedClientIpHash(scope: "booking" | "login" | "mobile-pair", address: string, sessionSecret: string | undefined): string | null {
   if (!sessionSecret?.trim()) return null;
   return createHmac("sha256", sessionSecret).update(`${scope}\0${address}`).digest("hex");
 }
@@ -40,6 +40,10 @@ export function bookingClientIpHash(address: string, sessionSecret: string | und
 
 export function loginClientIpHash(address: string, sessionSecret: string | undefined): string | null {
   return scopedClientIpHash("login", address, sessionSecret);
+}
+
+export function mobilePairClientIpHash(address: string, sessionSecret: string | undefined): string | null {
+  return scopedClientIpHash("mobile-pair", address, sessionSecret);
 }
 
 export function bookingRateWindow(nowMs: number): { startedAtMs: number; retryAfterSeconds: number } {

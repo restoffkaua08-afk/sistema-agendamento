@@ -4,6 +4,9 @@
   "entries": [
     { "idx": 0, "version": "7", "when": 1790985600000, "tag": "0000_initial", "breakpoints": true },
     { "idx": 1, "version": "7", "when": 1790985601000, "tag": "0001_safe_reservation_guards", "breakpoints": true },
-    { "idx": 2, "version": "7", "when": 1790985602000, "tag": "0002_booking_rate_limits", "breakpoints": true }
+    { "idx": 2, "version": "7", "when": 1790985602000, "tag": "0002_booking_rate_limits", "breakpoints": true },
+    { "idx": 3, "version": "7", "when": 1790985603000, "tag": "0003_mobile_pairing", "breakpoints": true },
+    { "idx": 4, "version": "7", "when": 1791158400000, "tag": "0004_whatsapp_opt_in", "breakpoints": true },
+    { "idx": 5, "version": "7", "when": 1791306000000, "tag": "0005_enable_rls", "breakpoints": true }
   ]
 }

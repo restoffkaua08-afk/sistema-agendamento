@@ -2,11 +2,12 @@ import { createHash, randomBytes } from "node:crypto";
 import Fastify from "fastify";
 import { and, eq, gt, gte, inArray, lt, sql } from "drizzle-orm";
 import { createDatabase } from "./db/client.js";
-import { appointmentEvents, appointments, bookingRateLimits, customers, idempotencyKeys, notificationOutbox, services, staff, staffServices, tenants, timeOff, workingHours } from "./db/schema.js";
+import { appointmentEvents, appointments, bookingRateLimits, customers, idempotencyKeys, mobilePairingCodes, mobilePairRateLimits, notificationOutbox, services, staff, staffServices, tenants, timeOff, workingHours } from "./db/schema.js";
 import { auditEvents, memberships, users } from "./db/schema.js";
 import { canManageTenant, signSession, verifyPassword, verifySession } from "./auth.js";
 import { CONTRACT_VERSION, localDateTimeToInstant } from "@agenda/contracts";
-import { bookingClientAddress, bookingClientIpHash, bookingRateWindow, RATE_LIMIT_MAX_ATTEMPTS, loginClientIpHash } from "./domain/booking-rate-limit.js";
+import { bookingClientAddress, bookingClientIpHash, bookingRateWindow, RATE_LIMIT_MAX_ATTEMPTS, loginClientIpHash, mobilePairClientIpHash } from "./domain/booking-rate-limit.js";
+import { createMobilePairingCode, formatMobilePairingCode, hashMobilePairingCode, MOBILE_PAIRING_TTL_MS } from "./domain/mobile-pairing.js";
 import { isUuid, parseServiceSettings } from "./domain/service-settings.js";
 
 export const app = Fastify({ logger: true });
@@ -14,7 +15,7 @@ const database = createDatabase();
 const activeStatuses = ["pending", "confirmed"] as const;
 const weekdayNames: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
-type CreateAppointment = { serviceId: string; staffId: string; startsAt: string; customerName: string; customerEmail: string; customerPhone: string };
+type CreateAppointment = { serviceId: string; staffId: string; startsAt: string; customerName: string; customerEmail: string; customerPhone: string; whatsappOptIn?: boolean };
 type AppointmentResponse = { appointment: { readableNumber: string; status: string; startsAt: string; endsAt: string }; manageToken: string };
 type LoginInput = { email: string; password: string; tenantSlug: string };
 type StatusInput = { status: "confirmed" | "cancelled" | "completed" | "no_show" };
@@ -26,7 +27,8 @@ class HttpError extends Error {
 function isCreateAppointment(input: unknown): input is CreateAppointment {
   if (!input || typeof input !== "object") return false;
   const value = input as Partial<CreateAppointment>;
-  return typeof value.serviceId === "string" && typeof value.staffId === "string" && typeof value.startsAt === "string" && typeof value.customerName === "string" && value.customerName.trim().length >= 2 && typeof value.customerEmail === "string" && value.customerEmail.includes("@") && typeof value.customerPhone === "string" && value.customerPhone.replace(/\D/g, "").length >= 8;
+  const phoneLength = typeof value.customerPhone === "string" ? value.customerPhone.replace(/\D/g, "").length : 0;
+  return typeof value.serviceId === "string" && typeof value.staffId === "string" && typeof value.startsAt === "string" && typeof value.customerName === "string" && value.customerName.trim().length >= 2 && typeof value.customerEmail === "string" && value.customerEmail.includes("@") && typeof value.customerPhone === "string" && phoneLength >= 8 && (value.whatsappOptIn === undefined || typeof value.whatsappOptIn === "boolean") && (value.whatsappOptIn !== true || (phoneLength >= 10 && phoneLength <= 15));
 }
 
 function unavailable(message: string): never { throw new HttpError(409, { code: "SLOT_UNAVAILABLE", message }); }
@@ -146,14 +148,115 @@ app.post<{ Body: unknown }>("/v1/auth/login", async (request, reply) => {
   return reply.send({ token, user: { email: account.email, displayName: account.displayName, role: account.role }, tenant: { slug: tenant.slug, name: tenant.name } });
 });
 
-app.get<{ Params: { slug: string }; Querystring: { date?: string } }>("/v1/owner/:slug/appointments", async (request, reply) => {
+app.post<{ Params: { slug: string } }>("/v1/owner/:slug/mobile-pairings", async (request, reply) => {
   const access = await ownerTenant(request, reply);
   if (!access || !database) return;
-  const dateBounds = request.query.date ? localDateBounds(request.query.date, access.tenant.timezone) : null;
-  if (request.query.date && !dateBounds) return reply.code(400).send({ code: "INVALID_DATE", message: "Informe uma data válida no fuso do estabelecimento." });
+  const code = createMobilePairingCode();
+  const expiresAt = new Date(Date.now() + MOBILE_PAIRING_TTL_MS);
+  try {
+    const pairing = await database.db.transaction(async (tx) => {
+      await tx.delete(mobilePairingCodes).where(lt(mobilePairingCodes.expiresAt, new Date()));
+      const [created] = await tx.insert(mobilePairingCodes).values({
+        tenantId: access.tenant.id,
+        createdByUserId: access.session.userId,
+        codeHash: hashMobilePairingCode(code)!,
+        expiresAt
+      }).returning({ id: mobilePairingCodes.id });
+      await tx.insert(auditEvents).values({
+        tenantId: access.tenant.id,
+        actorUserId: access.session.userId,
+        action: "mobile.pairing_code.created",
+        entityType: "mobile_pairing_code",
+        entityId: created.id,
+        metadata: { expiresAt: expiresAt.toISOString() }
+      });
+      return created;
+    });
+    return reply.code(201).send({ code: formatMobilePairingCode(code), expiresAt: expiresAt.toISOString(), tenant: { slug: access.tenant.slug, name: access.tenant.name } });
+  } catch (error) {
+    request.log.error(error);
+    return reply.code(500).send({ code: "PAIRING_CODE_CREATE_FAILED", message: "Não foi possível gerar o código de conexão." });
+  }
+});
+
+app.post<{ Body: unknown }>("/v1/mobile/pair", async (request, reply) => {
+  if (!database || !process.env.SESSION_SECRET) return reply.code(503).send({ code: "PAIRING_NOT_CONFIGURED", message: "Configure DATABASE_URL e SESSION_SECRET para conectar o aplicativo." });
+  const address = bookingClientAddress(request.ip, request.headers["x-real-ip"], request.headers["x-forwarded-for"], Boolean(process.env.VERCEL));
+  const ipHash = address && mobilePairClientIpHash(address, process.env.SESSION_SECRET);
+  if (!ipHash) return reply.code(503).send({ code: "PAIRING_PROTECTION_NOT_CONFIGURED", message: "A proteção de conexão não está configurada." });
+  const window = bookingRateWindow(Date.now());
+  let countedAttempt;
+  try {
+    await database.db.delete(mobilePairRateLimits).where(lt(mobilePairRateLimits.windowStartedAt, new Date(window.startedAtMs)));
+    await database.db.delete(mobilePairingCodes).where(lt(mobilePairingCodes.expiresAt, new Date()));
+    [countedAttempt] = await database.db.insert(mobilePairRateLimits).values({ ipHash, windowStartedAt: new Date(window.startedAtMs), attempts: 1 }).onConflictDoUpdate({
+      target: [mobilePairRateLimits.ipHash, mobilePairRateLimits.windowStartedAt],
+      set: { attempts: sql`${mobilePairRateLimits.attempts} + 1` },
+      setWhere: lt(mobilePairRateLimits.attempts, RATE_LIMIT_MAX_ATTEMPTS)
+    }).returning({ attempts: mobilePairRateLimits.attempts });
+  } catch (error) {
+    request.log.error(error);
+    return reply.code(503).send({ code: "PAIRING_PROTECTION_UNAVAILABLE", message: "Não foi possível validar o limite de conexões." });
+  }
+  if (!countedAttempt) {
+    reply.header("Retry-After", String(window.retryAfterSeconds));
+    return reply.code(429).send({ code: "PAIRING_RATE_LIMITED", message: "Limite de tentativas atingido. Tente novamente após o período indicado." });
+  }
+  const codeHash = hashMobilePairingCode((request.body as { code?: unknown } | null)?.code);
+  if (!codeHash) return reply.code(401).send({ code: "INVALID_PAIRING_CODE", message: "Código inválido ou expirado." });
+
+  try {
+    const paired = await database.db.transaction(async (tx) => {
+      const now = new Date();
+      const [pairing] = await tx.select({ id: mobilePairingCodes.id, tenantId: mobilePairingCodes.tenantId, createdByUserId: mobilePairingCodes.createdByUserId })
+        .from(mobilePairingCodes)
+        .where(and(eq(mobilePairingCodes.codeHash, codeHash), gt(mobilePairingCodes.expiresAt, now)))
+        .limit(1).for("update");
+      if (!pairing) return null;
+      await tx.delete(mobilePairingCodes).where(eq(mobilePairingCodes.id, pairing.id));
+      const [account] = await tx.select({ id: users.id, email: users.email, displayName: users.displayName, role: memberships.role })
+        .from(users).innerJoin(memberships, eq(memberships.userId, users.id))
+        .where(and(eq(users.id, pairing.createdByUserId), eq(memberships.tenantId, pairing.tenantId))).limit(1);
+      if (!account || !canManageTenant(account.role)) return null;
+      const [tenant] = await tx.select({ id: tenants.id, slug: tenants.slug, name: tenants.name, timezone: tenants.timezone }).from(tenants).where(eq(tenants.id, pairing.tenantId)).limit(1);
+      if (!tenant) return null;
+      await tx.insert(auditEvents).values({
+        tenantId: pairing.tenantId,
+        actorUserId: pairing.createdByUserId,
+        action: "mobile.pairing_code.consumed",
+        entityType: "mobile_pairing_code",
+        entityId: pairing.id,
+        metadata: { paired: true }
+      });
+      return { account, tenant };
+    });
+    if (!paired) return reply.code(401).send({ code: "INVALID_PAIRING_CODE", message: "Código inválido ou expirado." });
+    const token = signSession({ userId: paired.account.id, tenantId: paired.tenant.id, role: paired.account.role, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 8 });
+  return reply.send({ token, user: { email: paired.account.email, displayName: paired.account.displayName, role: paired.account.role }, tenant: { slug: paired.tenant.slug, name: paired.tenant.name, timezone: paired.tenant.timezone } });
+  } catch (error) {
+    request.log.error(error);
+    return reply.code(500).send({ code: "PAIRING_FAILED", message: "Não foi possível conectar o aplicativo." });
+  }
+});
+
+app.get<{ Params: { slug: string }; Querystring: { date?: string; month?: string } }>("/v1/owner/:slug/appointments", async (request, reply) => {
+  const access = await ownerTenant(request, reply);
+  if (!access || !database) return;
+  if (request.query.date && request.query.month) return reply.code(400).send({ code: "INVALID_DATE", message: "Escolha um dia ou um mês para consultar." });
+  let dateBounds = request.query.date ? localDateBounds(request.query.date, access.tenant.timezone) : null;
+  if (request.query.month) {
+    const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(request.query.month);
+    if (match) {
+      const start = localDateBounds(`${request.query.month}-01`, access.tenant.timezone);
+      const nextMonth = new Date(Date.UTC(Number(match[1]), Number(match[2]), 1)).toISOString().slice(0, 10);
+      const end = localDateBounds(nextMonth, access.tenant.timezone);
+      if (start && end) dateBounds = { startsAt: start.startsAt, endsAt: end.startsAt };
+    }
+  }
+  if ((request.query.date || request.query.month) && !dateBounds) return reply.code(400).send({ code: "INVALID_DATE", message: "Informe um dia ou mês válido no fuso do estabelecimento." });
   const filters = [eq(appointments.tenantId, access.tenant.id), inArray(appointments.status, ["pending", "confirmed", "completed", "no_show"] as const)];
   if (dateBounds) filters.push(gte(appointments.startsAt, dateBounds.startsAt), lt(appointments.startsAt, dateBounds.endsAt));
-  const rows = await database.db.select({ id: appointments.id, readableNumber: appointments.readableNumber, startsAt: appointments.startsAt, endsAt: appointments.endsAt, status: appointments.status, serviceName: appointments.serviceNameSnapshot, customerName: customers.name, customerEmail: customers.email, customerPhone: customers.phone, staffName: staff.name }).from(appointments).innerJoin(customers, eq(customers.id, appointments.customerId)).innerJoin(staff, eq(staff.id, appointments.staffId)).where(and(...filters));
+  const rows = await database.db.select({ id: appointments.id, readableNumber: appointments.readableNumber, startsAt: appointments.startsAt, endsAt: appointments.endsAt, status: appointments.status, serviceName: appointments.serviceNameSnapshot, customerName: customers.name, customerEmail: customers.email, customerPhone: customers.phone, whatsappOptIn: appointments.whatsappOptIn, staffName: staff.name }).from(appointments).innerJoin(customers, eq(customers.id, appointments.customerId)).innerJoin(staff, eq(staff.id, appointments.staffId)).where(and(...filters));
   return reply.send({ appointments: rows });
 });
 
@@ -164,13 +267,19 @@ app.patch<{ Params: { slug: string; id: string }; Body: unknown }>("/v1/owner/:s
   if (!isStatusInput(body)) return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Status inválido." });
   const [appointment] = await database.db.select({ id: appointments.id, status: appointments.status }).from(appointments).where(and(eq(appointments.id, request.params.id), eq(appointments.tenantId, access.tenant.id))).limit(1);
   if (!appointment) return reply.code(404).send({ code: "NOT_FOUND", message: "Agendamento não encontrado." });
+  const canChange = appointment.status === "pending"
+    ? body.status === "confirmed" || body.status === "cancelled"
+    : appointment.status === "confirmed" && (body.status === "cancelled" || body.status === "completed" || body.status === "no_show");
+  if (!canChange) return reply.code(409).send({ code: "INVALID_STATUS_TRANSITION", message: "Este agendamento já foi atualizado." });
   const [updated] = await database.db.transaction(async (tx) => {
-    const result = await tx.update(appointments).set({ status: body.status }).where(and(eq(appointments.id, appointment.id), eq(appointments.tenantId, access.tenant.id))).returning({ id: appointments.id, status: appointments.status });
+    const result = await tx.update(appointments).set({ status: body.status }).where(and(eq(appointments.id, appointment.id), eq(appointments.tenantId, access.tenant.id), eq(appointments.status, appointment.status))).returning({ id: appointments.id, status: appointments.status });
+    if (!result[0]) return [];
     await tx.insert(appointmentEvents).values({ tenantId: access.tenant.id, appointmentId: appointment.id, type: "status_changed", payload: { from: appointment.status, to: body.status, actorUserId: access.session.userId } });
     await tx.insert(auditEvents).values({ tenantId: access.tenant.id, actorUserId: access.session.userId, action: "appointment.status_changed", entityType: "appointment", entityId: appointment.id, metadata: { from: appointment.status, to: body.status } });
     if (body.status === "cancelled") await tx.insert(notificationOutbox).values({ tenantId: access.tenant.id, appointmentId: appointment.id, kind: "appointment.cancelled", payload: { appointmentId: appointment.id } });
     return result;
   });
+  if (!updated) return reply.code(409).send({ code: "INVALID_STATUS_TRANSITION", message: "Este agendamento já foi atualizado." });
   return reply.send({ appointment: updated });
 });
 
@@ -344,7 +453,7 @@ app.post<{ Params: { slug: string }; Body: unknown }>("/v1/public/:slug/appointm
       const [customer] = await tx.insert(customers).values({ tenantId: tenant.id, name: body.customerName.trim(), email: body.customerEmail.trim().toLowerCase(), phone: body.customerPhone.trim() }).onConflictDoUpdate({ target: [customers.tenantId, customers.phone], set: { name: body.customerName.trim(), email: body.customerEmail.trim().toLowerCase() } }).returning({ id: customers.id });
       const manageToken = randomBytes(24).toString("base64url");
       const readableNumber = `A-${randomBytes(4).toString("hex").toUpperCase()}`;
-      const [appointment] = await tx.insert(appointments).values({ tenantId: tenant.id, customerId: customer.id, staffId: professional.id, serviceId: service.id, serviceNameSnapshot: service.name, durationMinutesSnapshot: service.durationMinutes, startsAt, endsAt, status: "confirmed", origin: "public", manageTokenHash: createHash("sha256").update(manageToken).digest("hex"), manageTokenExpiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30), readableNumber }).returning({ id: appointments.id, readableNumber: appointments.readableNumber, status: appointments.status, startsAt: appointments.startsAt, endsAt: appointments.endsAt });
+      const [appointment] = await tx.insert(appointments).values({ tenantId: tenant.id, customerId: customer.id, staffId: professional.id, serviceId: service.id, serviceNameSnapshot: service.name, durationMinutesSnapshot: service.durationMinutes, startsAt, endsAt, status: "pending", origin: "public", whatsappOptIn: body.whatsappOptIn === true, manageTokenHash: createHash("sha256").update(manageToken).digest("hex"), manageTokenExpiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30), readableNumber }).returning({ id: appointments.id, readableNumber: appointments.readableNumber, status: appointments.status, startsAt: appointments.startsAt, endsAt: appointments.endsAt });
       await tx.insert(appointmentEvents).values({ tenantId: tenant.id, appointmentId: appointment.id, type: "created", payload: { origin: "public" } });
       await tx.insert(notificationOutbox).values({ tenantId: tenant.id, appointmentId: appointment.id, kind: "appointment.created", payload: { appointmentId: appointment.id, readableNumber: appointment.readableNumber } });
       const response: AppointmentResponse = { appointment: { readableNumber: appointment.readableNumber, status: appointment.status, startsAt: appointment.startsAt.toISOString(), endsAt: appointment.endsAt.toISOString() }, manageToken };
