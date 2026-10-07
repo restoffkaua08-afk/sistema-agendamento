@@ -1,1 +1,26 @@
-{"name":"@agenda/api","private":true,"version":"0.1.0","type":"module","scripts":{"typecheck":"tsc --noEmit","test":"tsx --test --test-concurrency=1","db:migrate":"drizzle-kit migrate","db:bootstrap":"tsx src/db/bootstrap.ts"},"dependencies":{"@agenda/contracts":"*","drizzle-orm":"0.45.2","fastify":"5.4.0","postgres":"3.4.7"},"devDependencies":{"@types/node":"22.15.0","drizzle-kit":"0.31.10","tsx":"4.23.15","typescript":"5.8.3"}}
+{
+  "name": "@agenda/api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:contracts",
+    "build:contracts": "tsc -p ../../packages/contracts/tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build:contracts && tsx --test --test-concurrency=1",
+    "db:migrate": "drizzle-kit migrate",
+    "db:bootstrap": "tsx src/db/bootstrap.ts"
+  },
+  "dependencies": {
+    "@agenda/contracts": "*",
+    "drizzle-orm": "0.45.2",
+    "fastify": "5.4.0",
+    "postgres": "3.4.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.0",
+    "drizzle-kit": "0.31.10",
+    "tsx": "4.23.15",
+    "typescript": "5.8.3"
+  }
+}

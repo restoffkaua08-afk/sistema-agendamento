@@ -3,9 +3,10 @@
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev:web": "npm --workspace apps/web run dev",
-    "dev:api": "npm --workspace apps/api exec -- tsx src/server.ts",
-    "build:web": "npm --workspace apps/web run build",
+    "build:contracts": "npm --workspace apps/api run build:contracts",
+    "dev:web": "npm run build:contracts && npm --workspace apps/web run dev",
+    "dev:api": "npm run build:contracts && npm --workspace apps/api exec -- tsx src/server.ts",
+    "build:web": "npm run build:contracts && npm --workspace apps/web run build",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present"
   }

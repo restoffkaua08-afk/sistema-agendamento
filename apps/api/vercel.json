@@ -1,5 +1,11 @@
 {
-  "functions": { "api/index.ts": { "maxDuration": 30 } },
+  "buildCommand": "npm run build",
+  "functions": {
+    "api/index.ts": {
+      "maxDuration": 30,
+      "includeFiles": "../../packages/contracts/dist/**/*.js"
+    }
+  },
   "rewrites": [
     { "source": "/v1/:path*", "destination": "/api/index?__agenda_path=/v1/:path*" }
   ]
