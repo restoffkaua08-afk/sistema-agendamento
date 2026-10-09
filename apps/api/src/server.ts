@@ -88,7 +88,7 @@ app.addHook("onRequest", async (request, reply) => {
   if (origin && allowedOrigins.has(origin)) {
     reply.header("Access-Control-Allow-Origin", origin);
     reply.header("Vary", "Origin");
-    reply.header("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS");
+    reply.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
     reply.header("Access-Control-Allow-Headers", "Authorization,Content-Type,Idempotency-Key");
     reply.header("Access-Control-Max-Age", "600");
   }
