@@ -233,7 +233,7 @@ app.patch("/v1/owner/:slug/appointments/:id", async (request, reply) => {
     const transitions: Record<string, string[]> = { pending: ["confirmed","cancelled"], confirmed: ["cancelled","completed","no_show"], cancelled: [], completed: [], no_show: [] };
     if (!transitions[current.status ?? ""]?.includes(String(body.status)))
       return reply.code(409).send({ code: "INVALID_STATUS_TRANSITION", message: "Este agendamento não pode mudar para esse status." });
-    const updated = await supabaseFetch(path, { method: "PATCH", headers: { ...headers, Prefer: "return=representation" }, body: JSON.stringify({ status: body.status }) });
+    const updated = await supabaseFetch(`${path}&status=eq.${encodeURIComponent(current.status ?? "")}`, { method: "PATCH", headers: { ...headers, Prefer: "return=representation" }, body: JSON.stringify({ status: body.status }) });
     const appointment = Array.isArray(updated) ? updated[0] : undefined;
     if (!appointment) return reply.code(409).send({ code: "UPDATE_CONFLICT", message: "Atualize a agenda e tente novamente." });
     return reply.header("Cache-Control", "no-store").send({ appointment });
