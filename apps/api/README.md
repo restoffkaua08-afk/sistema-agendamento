@@ -9,7 +9,7 @@ This API is the shared backend for the public booking website and, as the next i
 - `GET /v1/public/:slug/appointments?staffId=<uuid>&date=YYYY-MM-DD` — returns occupied appointment intervals for availability calculations.
 - `POST /v1/public/:slug/appointments` — creates a pending appointment through a PostgreSQL transaction. Requires `Idempotency-Key`.
 
-The booking function validates the tenant, active service, staff/service association, working hours, future date, and overlaps. It serializes writes per tenant/professional and replays a matching idempotency key. Public website calls should go through the website's server-side `/api/appointments` proxy; do not expose the Supabase server secret in a browser or mobile bundle.
+The booking function validates the tenant, active service, staff/service association, working hours, future date, and overlaps. It serializes writes per tenant/professional and replays a matching idempotency key. Public website calls should go through the website's server-side `/api/appointments` proxy; the API uses the Supabase publishable key only for three narrowly scoped booking RPCs; base-table access remains revoked for public roles.
 
 ## Supabase setup
 
@@ -18,11 +18,11 @@ The booking function validates the tenant, active service, staff/service associa
 3. Add the first tenant, services, staff, staff-service links and working hours using an authorized administrative workflow.
 4. Configure these server-only Vercel environment variables for the API project:
    - `SUPABASE_URL`
-   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `SUPABASE_PUBLISHABLE_KEY` (used only for the three restricted public booking RPCs)
    - `ALLOWED_ORIGINS` (comma-separated; include the deployed business web origin and `https://localhost` only if the native Capacitor app will call the API directly)
 5. Deploy a preview and verify `/health`, catalog, availability and booking against test data before production.
 
-Never set `SUPABASE_SERVICE_ROLE_KEY` as a `NEXT_PUBLIC_*` variable or put it in the mobile app.
+Do not add a Supabase secret/service-role key to this API, a `NEXT_PUBLIC_*` variable, or the mobile app. The publishable key is not a secret; the database must keep base-table privileges revoked and expose only the validated public RPCs.
 
 ## Not yet a commercial release
 
