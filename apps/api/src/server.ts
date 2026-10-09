@@ -1,4 +1,7 @@
 import Fastify, { type FastifyRequest } from "fastify";
+// Live owner/admin endpoints use Supabase Auth and tenant-scoped database queries.
+
+
 
 const app = Fastify({ logger: true, bodyLimit: 16_000, trustProxy: false });
 const allowedOrigins = new Set((process.env.ALLOWED_ORIGINS ?? "https://localhost")
