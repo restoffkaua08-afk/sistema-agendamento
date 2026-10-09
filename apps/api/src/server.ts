@@ -375,6 +375,36 @@ app.patch("/v1/owner/:slug/staff/:id", async (request, reply) => {
   } catch (error) { return errorResponse(error, reply); }
 });
 
+
+app.put("/v1/owner/:slug/working-hours", async (request, reply) => {
+  const { days } = (request.body ?? {}) as { days?: unknown };
+  if (!Array.isArray(days) || days.length !== 7) {
+    return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Informe os sete dias da semana." });
+  }
+  const weekdays = new Set<number>();
+  for (const item of days) {
+    if (!item || typeof item !== "object") return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Horários inválidos." });
+    const day = item as { weekday?: unknown; open?: unknown; start?: unknown; end?: unknown };
+    if (!Number.isInteger(day.weekday) || Number(day.weekday) < 0 || Number(day.weekday) > 6 ||
+        weekdays.has(Number(day.weekday)) || typeof day.open !== "boolean" ||
+        (day.open && (typeof day.start !== "string" || !/^([01]\\d|2[0-3]):[0-5]\\d$/.test(day.start) ||
+          typeof day.end !== "string" || !/^([01]\\d|2[0-3]):[0-5]\\d$/.test(day.end) || day.start >= day.end))) {
+      return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Confira os dias e os horários de abertura e fechamento." });
+    }
+    weekdays.add(Number(day.weekday));
+  }
+  try {
+    const ctx = await ownerContext(request, (request.params as { slug: string }).slug);
+    if (!ctx) return reply.code(401).send({ code: "UNAUTHORIZED", message: "Conta não autorizada para esta barbearia." });
+    if (!canManageCatalog(ctx)) return reply.code(403).send({ code: "FORBIDDEN", message: "Somente proprietários e administradores podem alterar horários." });
+    const result = await supabaseFetch("rest/v1/rpc/replace_tenant_working_hours", {
+      method: "POST", headers: ownerHeaders(ctx),
+      body: JSON.stringify({ p_tenant_id: ctx.tenantId, p_days: days }),
+    });
+    return reply.header("Cache-Control", "no-store").send({ result });
+  } catch (error) { return errorResponse(error, reply); }
+});
+
 app.get("/v1/owner/:slug/appointments", async (request, reply) => {
   const q = request.query as { from?: string; to?: string; status?: string };
   if (!q.from || !q.to || !Number.isFinite(Date.parse(q.from)) || !Number.isFinite(Date.parse(q.to)) || Date.parse(q.from) >= Date.parse(q.to) || Date.parse(q.to) - Date.parse(q.from) > 93 * 86400000)
