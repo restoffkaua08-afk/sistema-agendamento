@@ -342,17 +342,13 @@ app.put("/v1/owner/:slug/staff/:id/services", async (request, reply) => {
       if (!Array.isArray(services) || services.length !== serviceIds.length)
         return reply.code(400).send({ code: "INVALID_SERVICE", message: "Um ou mais serviços não pertencem a esta barbearia." });
     }
-    // Replace links only after validating the complete requested set and tenant ownership.
-    await supabaseFetch(`rest/v1/staff_services?tenant_id=eq.${ctx.tenantId}&staff_id=eq.${id}`, {
-      method: "DELETE", headers,
+    // The database RPC replaces the set in one transaction; never delete links in a separate request.
+    const result = await supabaseFetch("rest/v1/rpc/replace_staff_services", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ p_tenant_id: ctx.tenantId, p_staff_id: id, p_service_ids: serviceIds }),
     });
-    if (serviceIds.length) {
-      await supabaseFetch("rest/v1/staff_services", {
-        method: "POST", headers: { ...headers, Prefer: "return=minimal" },
-        body: JSON.stringify(serviceIds.map((serviceId) => ({ tenant_id: ctx.tenantId, staff_id: id, service_id: serviceId }))),
-      });
-    }
-    return reply.header("Cache-Control", "no-store").send({ staffId: id, serviceIds });
+    return reply.header("Cache-Control", "no-store").send(result ?? { staffId: id, serviceIds });
   } catch (error) { return errorResponse(error, reply); }
 });
 
