@@ -277,17 +277,23 @@ app.get("/v1/owner/:slug/clients", async (request, reply) => {
     for (const row of rows) {
       const key = row.customer_phone;
       const existing = clients.get(key);
+      const completed = row.status === "completed";
       if (existing) {
-        existing.visits += 1;
-        if (!existing.lastVisit || row.starts_at > existing.lastVisit) existing.lastVisit = row.starts_at;
+        if (completed) {
+          existing.visits += 1;
+          if (!existing.lastVisit || row.starts_at > existing.lastVisit) existing.lastVisit = row.starts_at;
+        }
+        // Keep the most recently seen customer details even when the newest booking is not completed.
+        if (!existing.name && row.customer_name) existing.name = row.customer_name;
+        if (!existing.email && row.customer_email) existing.email = row.customer_email;
       } else {
         clients.set(key, {
           id: key,
           name: row.customer_name,
           phone: row.customer_phone,
           ...(row.customer_email ? { email: row.customer_email } : {}),
-          visits: 1,
-          lastVisit: row.starts_at,
+          visits: completed ? 1 : 0,
+          ...(completed ? { lastVisit: row.starts_at } : {}),
         });
       }
     }
