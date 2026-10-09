@@ -5,8 +5,8 @@ alter table public.appointments
 create or replace function public.get_public_catalog(p_slug text)
 returns jsonb
 language plpgsql
-security invoker
-set search_path = public
+security definer
+set search_path = public, pg_temp
 as $$
 declare t public.tenants%rowtype;
 begin
@@ -47,8 +47,8 @@ $$;
 create or replace function public.get_public_appointments(p_slug text, p_staff_id uuid, p_date date)
 returns jsonb
 language plpgsql
-security invoker
-set search_path = public
+security definer
+set search_path = public, pg_temp
 as $$
 declare t public.tenants%rowtype;
 begin
@@ -75,8 +75,8 @@ create or replace function public.create_public_appointment(
 )
 returns jsonb
 language plpgsql
-security invoker
-set search_path = public
+security definer
+set search_path = public, pg_temp
 as $$
 declare
   t public.tenants%rowtype;
