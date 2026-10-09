@@ -236,12 +236,13 @@ app.get("/v1/owner/:slug/catalog", async (request, reply) => {
     const ctx = await ownerContext(request, (request.params as { slug: string }).slug);
     if (!ctx) return reply.code(401).send({ code: "UNAUTHORIZED", message: "Conta não autorizada para esta barbearia." });
     const headers = ownerHeaders(ctx);
-    const [services, staff, workingHours] = await Promise.all([
+    const [services, staff, staffServices, workingHours] = await Promise.all([
       supabaseFetch(`rest/v1/services?tenant_id=eq.${ctx.tenantId}&select=id,name,description,duration_minutes,buffer_minutes,price,active&order=name.asc`, { headers }),
       supabaseFetch(`rest/v1/staff?tenant_id=eq.${ctx.tenantId}&select=id,name,active&order=name.asc`, { headers }),
+      supabaseFetch(`rest/v1/staff_services?tenant_id=eq.${ctx.tenantId}&select=staff_id,service_id`, { headers }),
       supabaseFetch(`rest/v1/working_hours?tenant_id=eq.${ctx.tenantId}&select=id,staff_id,weekday,starts_at,ends_at,active&order=weekday.asc,starts_at.asc`, { headers }),
     ]);
-    return reply.header("Cache-Control", "no-store").send({ services, staff, workingHours });
+    return reply.header("Cache-Control", "no-store").send({ services, staff, staffServices, workingHours });
   } catch (error) { return errorResponse(error, reply); }
 });
 
