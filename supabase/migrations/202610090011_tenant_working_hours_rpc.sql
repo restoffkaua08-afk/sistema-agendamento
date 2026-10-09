@@ -1,4 +1,14 @@
 -- Atomically replace the tenant-wide business schedule for all active staff.
+
+grant insert, delete on public.working_hours to authenticated;
+create policy working_hours_owner_admin_insert on public.working_hours
+  for insert to authenticated with check (
+    exists (select 1 from public.tenant_members tm where tm.tenant_id = working_hours.tenant_id and tm.user_id = (select auth.uid()) and tm.role in ('owner','admin'))
+  );
+create policy working_hours_owner_admin_delete on public.working_hours
+  for delete to authenticated using (
+    exists (select 1 from public.tenant_members tm where tm.tenant_id = working_hours.tenant_id and tm.user_id = (select auth.uid()) and tm.role in ('owner','admin'))
+  );
 create or replace function public.replace_tenant_working_hours(
   p_tenant_id uuid,
   p_days jsonb
