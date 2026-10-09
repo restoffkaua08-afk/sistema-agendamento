@@ -262,6 +262,42 @@ app.get("/v1/owner/:slug/appointments", async (request, reply) => {
   } catch (error) { return errorResponse(error, reply); }
 });
 
+app.get("/v1/owner/:slug/clients", async (request, reply) => {
+  const query = request.query as { search?: string };
+  const search = (query.search ?? "").trim().toLocaleLowerCase("pt-BR");
+  if (search.length > 120) return reply.code(400).send({ code: "INVALID_SEARCH", message: "Busca muito longa." });
+  try {
+    const ctx = await ownerContext(request, (request.params as { slug: string }).slug);
+    if (!ctx) return reply.code(401).send({ code: "UNAUTHORIZED", message: "Conta não autorizada para esta barbearia." });
+    const rows = await supabaseFetch(
+      `rest/v1/appointments?tenant_id=eq.${ctx.tenantId}&select=customer_name,customer_email,customer_phone,starts_at,status&order=starts_at.desc&limit=5000`,
+      { headers: ownerHeaders(ctx) },
+    ) as Array<{ customer_name: string; customer_email: string; customer_phone: string; starts_at: string; status: string }>;
+    const clients = new Map<string, { id: string; name: string; phone: string; email?: string; visits: number; lastVisit?: string }>();
+    for (const row of rows) {
+      const key = row.customer_phone;
+      const existing = clients.get(key);
+      if (existing) {
+        existing.visits += 1;
+        if (!existing.lastVisit || row.starts_at > existing.lastVisit) existing.lastVisit = row.starts_at;
+      } else {
+        clients.set(key, {
+          id: key,
+          name: row.customer_name,
+          phone: row.customer_phone,
+          ...(row.customer_email ? { email: row.customer_email } : {}),
+          visits: 1,
+          lastVisit: row.starts_at,
+        });
+      }
+    }
+    const result = Array.from(clients.values()).filter((client) =>
+      !search || `${client.name} ${client.phone} ${client.email ?? ""}`.toLocaleLowerCase("pt-BR").includes(search),
+    );
+    return reply.header("Cache-Control", "no-store").send({ clients: result });
+  } catch (error) { return errorResponse(error, reply); }
+});
+
 app.patch("/v1/owner/:slug/appointments/:id", async (request, reply) => {
   const { slug, id } = request.params as { slug: string; id: string };
   const body = request.body as { status?: unknown } | null;
