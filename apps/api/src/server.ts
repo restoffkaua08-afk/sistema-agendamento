@@ -193,7 +193,7 @@ app.post("/v1/owner/:slug/login", async (request, reply) => {
   const { slug } = request.params as { slug: string };
   const body = request.body as { email?: unknown; password?: unknown } | null;
   if (!/^[a-z0-9-]{2,50}$/.test(slug) || !body || typeof body.email !== "string" ||
-      body.email.length > 254 || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(body.email) ||
+      body.email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email) ||
       typeof body.password !== "string" || body.password.length < 6 || body.password.length > 256) {
     return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Informe um e-mail e uma senha válidos." });
   }
