@@ -178,6 +178,41 @@ async function ownerContext(request: FastifyRequest, slug: string): Promise<Owne
 }
 const ownerHeaders = (ctx: OwnerContext) => ({ Authorization: `Bearer ${ctx.token}` });
 
+
+app.post("/v1/owner/:slug/login", async (request, reply) => {
+  const { slug } = request.params as { slug: string };
+  const body = request.body as { email?: unknown; password?: unknown } | null;
+  if (!/^[a-z0-9-]{2,50}$/.test(slug) || !body || typeof body.email !== "string" ||
+      body.email.length > 254 || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(body.email) ||
+      typeof body.password !== "string" || body.password.length < 6 || body.password.length > 256) {
+    return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Informe um e-mail e uma senha válidos." });
+  }
+  try {
+    const config = supabaseConfig();
+    if (!config) throw Object.assign(new Error("DATABASE_NOT_CONFIGURED"), { code: "DATABASE_NOT_CONFIGURED" });
+    const authResponse = await fetch(new URL("auth/v1/token?grant_type=password", `${config.base}/`), {
+      method: "POST",
+      headers: { apikey: config.key, "Content-Type": "application/json" },
+      body: JSON.stringify({ email: body.email.trim(), password: body.password }),
+      signal: AbortSignal.timeout(10000),
+      redirect: "error",
+    });
+    const authData = await authResponse.json().catch(() => null) as { access_token?: string; refresh_token?: string; expires_in?: number; user?: { id?: string; email?: string; user_metadata?: { full_name?: string; name?: string } } ; msg?: string; message?: string } | null;
+    if (!authResponse.ok || !authData?.access_token || !authData.user?.id) {
+      return reply.code(401).send({ code: "INVALID_CREDENTIALS", message: "E-mail ou senha incorretos." });
+    }
+    const authRequest = { headers: { authorization: `Bearer ${authData.access_token}` } } as FastifyRequest;
+    const context = await ownerContext(authRequest, slug);
+    if (!context) return reply.code(403).send({ code: "NOT_A_MEMBER", message: "Esta conta ainda não tem acesso administrativo a esta barbearia." });
+    return reply.header("Cache-Control", "no-store").send({
+      token: authData.access_token,
+      refreshToken: authData.refresh_token,
+      expiresIn: authData.expires_in,
+      user: { id: context.userId, email: authData.user.email ?? body.email, name: authData.user.user_metadata?.full_name ?? authData.user.user_metadata?.name ?? "Administrador", role: context.role },
+    });
+  } catch (error) { return errorResponse(error, reply); }
+});
+
 app.get("/v1/owner/:slug/session", async (request, reply) => {
   try {
     const ctx = await ownerContext(request, (request.params as { slug: string }).slug);
