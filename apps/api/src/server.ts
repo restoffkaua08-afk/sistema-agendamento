@@ -152,7 +152,7 @@ app.post("/v1/public/:slug/appointments", async (request: FastifyRequest, reply)
         p_starts_at: body.startsAt,
         p_customer_name: body.customerName,
         p_customer_email: body.customerEmail,
-        p_customer_phone: normalizeBrazilianPhone(body.customerPhone)!,
+        p_customer_phone: normalizeBrazilianPhone(body.customerPhone as string)!,
         p_whatsapp_opt_in: body.whatsappOptIn === true,
         p_idempotency_key: idempotencyKey,
       }),
