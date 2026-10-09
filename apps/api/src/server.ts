@@ -15,11 +15,11 @@ type CreateAppointment = {
 };
 
 function normalizeBrazilianPhone(input: string): string | null {
-  let digits = input.replace(/\\D/g, "");
+  let digits = input.replace(/\D/g, "");
   if (digits.startsWith("00")) digits = digits.slice(2);
   if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) digits = digits.slice(2);
   if (digits.length !== 10 && digits.length !== 11) return null;
-  if (!/^[1-9]\\d$/.test(digits.slice(0, 2))) return null;
+  if (!/^[1-9]\d$/.test(digits.slice(0, 2))) return null;
   if (digits.length === 11 && digits[2] !== "9") return null;
   return `+55${digits}`;
 }
