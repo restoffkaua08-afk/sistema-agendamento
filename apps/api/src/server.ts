@@ -321,6 +321,41 @@ app.post("/v1/owner/:slug/staff", async (request, reply) => {
   } catch (error) { return errorResponse(error, reply); }
 });
 
+app.put("/v1/owner/:slug/staff/:id/services", async (request, reply) => {
+  const { slug, id } = request.params as { slug: string; id: string };
+  const body = request.body as { serviceIds?: unknown } | null;
+  if (!/^[0-9a-f-]{36}$/i.test(id) || !body || !Array.isArray(body.serviceIds) ||
+      body.serviceIds.length > 100 || body.serviceIds.some((value) => typeof value !== "string" || !/^[0-9a-f-]{36}$/i.test(value)) ||
+      new Set(body.serviceIds).size !== body.serviceIds.length) {
+    return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Informe uma lista válida de serviços." });
+  }
+  try {
+    const ctx = await ownerContext(request, slug);
+    if (!ctx) return reply.code(401).send({ code: "UNAUTHORIZED", message: "Conta não autorizada para esta barbearia." });
+    if (!canManageCatalog(ctx)) return reply.code(403).send({ code: "FORBIDDEN", message: "Somente proprietários e administradores podem alterar vínculos." });
+    const headers = ownerHeaders(ctx);
+    const staffRows = await supabaseFetch(`rest/v1/staff?id=eq.${id}&tenant_id=eq.${ctx.tenantId}&select=id&limit=1`, { headers });
+    if (!Array.isArray(staffRows) || !staffRows.length) return reply.code(404).send({ code: "STAFF_NOT_FOUND", message: "Profissional não encontrado." });
+    const serviceIds = body.serviceIds as string[];
+    if (serviceIds.length) {
+      const services = await supabaseFetch(`rest/v1/services?tenant_id=eq.${ctx.tenantId}&id=in.(${serviceIds.join(",")})&select=id`, { headers });
+      if (!Array.isArray(services) || services.length !== serviceIds.length)
+        return reply.code(400).send({ code: "INVALID_SERVICE", message: "Um ou mais serviços não pertencem a esta barbearia." });
+    }
+    // Replace links only after validating the complete requested set and tenant ownership.
+    await supabaseFetch(`rest/v1/staff_services?tenant_id=eq.${ctx.tenantId}&staff_id=eq.${id}`, {
+      method: "DELETE", headers,
+    });
+    if (serviceIds.length) {
+      await supabaseFetch("rest/v1/staff_services", {
+        method: "POST", headers: { ...headers, Prefer: "return=minimal" },
+        body: JSON.stringify(serviceIds.map((serviceId) => ({ tenant_id: ctx.tenantId, staff_id: id, service_id: serviceId }))),
+      });
+    }
+    return reply.header("Cache-Control", "no-store").send({ staffId: id, serviceIds });
+  } catch (error) { return errorResponse(error, reply); }
+});
+
 app.patch("/v1/owner/:slug/staff/:id", async (request, reply) => {
   const { slug, id } = request.params as { slug: string; id: string };
   const body = request.body as { name?: unknown; active?: unknown } | null;
