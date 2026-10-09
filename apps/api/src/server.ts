@@ -14,6 +14,16 @@ type CreateAppointment = {
   whatsappOptIn?: unknown;
 };
 
+function normalizeBrazilianPhone(input: string): string | null {
+  let digits = input.replace(/\\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("55") && (digits.length === 12 || digits.length === 13)) digits = digits.slice(2);
+  if (digits.length !== 10 && digits.length !== 11) return null;
+  if (!/^[1-9]\\d$/.test(digits.slice(0, 2))) return null;
+  if (digits.length === 11 && digits[2] !== "9") return null;
+  return `+55${digits}`;
+}
+
 function isCreateAppointment(input: unknown): input is CreateAppointment {
   if (!input || typeof input !== "object") return false;
   const value = input as CreateAppointment;
@@ -22,7 +32,7 @@ function isCreateAppointment(input: unknown): input is CreateAppointment {
     && typeof value.startsAt === "string" && !Number.isNaN(Date.parse(value.startsAt))
     && typeof value.customerName === "string" && value.customerName.trim().length >= 2 && value.customerName.length <= 100
     && typeof value.customerEmail === "string" && value.customerEmail.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.customerEmail.trim())
-    && typeof value.customerPhone === "string" && value.customerPhone.trim().length >= 8 && value.customerPhone.length <= 20
+    && typeof value.customerPhone === "string" && normalizeBrazilianPhone(value.customerPhone) !== null
     && (value.whatsappOptIn === undefined || typeof value.whatsappOptIn === "boolean");
 }
 
@@ -142,7 +152,7 @@ app.post("/v1/public/:slug/appointments", async (request: FastifyRequest, reply)
         p_starts_at: body.startsAt,
         p_customer_name: body.customerName,
         p_customer_email: body.customerEmail,
-        p_customer_phone: body.customerPhone,
+        p_customer_phone: normalizeBrazilianPhone(body.customerPhone)!,
         p_whatsapp_opt_in: body.whatsappOptIn === true,
         p_idempotency_key: idempotencyKey,
       }),
