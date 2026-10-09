@@ -405,6 +405,40 @@ app.put("/v1/owner/:slug/working-hours", async (request, reply) => {
   } catch (error) { return errorResponse(error, reply); }
 });
 
+app.get("/v1/owner/:slug/settings", async (request, reply) => {
+  try {
+    const ctx = await ownerContext(request, (request.params as { slug: string }).slug);
+    if (!ctx) return reply.code(401).send({ code: "UNAUTHORIZED", message: "Conta não autorizada para esta barbearia." });
+    const rows = await supabaseFetch("rest/v1/tenants?id=eq." + ctx.tenantId + "&select=id,slug,name,phone,address,timezone,currency,min_advance_hours,cancellation_hours,auto_confirm&limit=1", { headers: ownerHeaders(ctx) });
+    const row = Array.isArray(rows) ? rows[0] : undefined;
+    if (!row) return reply.code(404).send({ code: "TENANT_NOT_FOUND", message: "Barbearia não encontrada." });
+    return reply.header("Cache-Control", "no-store").send({ settings: { name: row.name, slug: row.slug, phone: row.phone, address: row.address, timezone: row.timezone, currency: row.currency, minAdvanceHours: row.min_advance_hours, cancellationHours: row.cancellation_hours, autoConfirm: row.auto_confirm } });
+  } catch (error) { return errorResponse(error, reply); }
+});
+
+app.patch("/v1/owner/:slug/settings", async (request, reply) => {
+  const body = request.body as { name?: unknown; phone?: unknown; address?: unknown; timezone?: unknown; currency?: unknown; minAdvanceHours?: unknown; cancellationHours?: unknown; autoConfirm?: unknown } | null;
+  if (!body || Object.keys(body).length === 0 || ("name" in body && (typeof body.name !== "string" || body.name.trim().length < 2 || body.name.trim().length > 120)) || ("phone" in body && (typeof body.phone !== "string" || body.phone.length > 40)) || ("address" in body && (typeof body.address !== "string" || body.address.length > 500)) || ("currency" in body && (typeof body.currency !== "string" || !/^[A-Z]{3}$/.test(body.currency))) || ("minAdvanceHours" in body && (!Number.isInteger(body.minAdvanceHours) || Number(body.minAdvanceHours) < 0 || Number(body.minAdvanceHours) > 720)) || ("cancellationHours" in body && (!Number.isInteger(body.cancellationHours) || Number(body.cancellationHours) < 0 || Number(body.cancellationHours) > 720)) || ("autoConfirm" in body && typeof body.autoConfirm !== "boolean")) return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Confira os dados das configurações." });
+  try {
+    const ctx = await ownerContext(request, (request.params as { slug: string }).slug);
+    if (!ctx) return reply.code(401).send({ code: "UNAUTHORIZED", message: "Conta não autorizada para esta barbearia." });
+    if (!canManageCatalog(ctx)) return reply.code(403).send({ code: "FORBIDDEN", message: "Somente proprietários e administradores podem alterar configurações." });
+    const update: Record<string, unknown> = {};
+    if (body.name !== undefined) update.name = (body.name as string).trim();
+    if (body.phone !== undefined) update.phone = (body.phone as string).trim();
+    if (body.address !== undefined) update.address = (body.address as string).trim();
+    if (body.timezone !== undefined) { if (typeof body.timezone !== "string" || body.timezone.length > 80) return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Fuso horário inválido." }); try { new Intl.DateTimeFormat("en-US", { timeZone: body.timezone }); } catch { return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Fuso horário inválido." }); } update.timezone = body.timezone; }
+    if (body.currency !== undefined) update.currency = body.currency;
+    if (body.minAdvanceHours !== undefined) update.min_advance_hours = body.minAdvanceHours;
+    if (body.cancellationHours !== undefined) update.cancellation_hours = body.cancellationHours;
+    if (body.autoConfirm !== undefined) update.auto_confirm = body.autoConfirm;
+    const rows = await supabaseFetch("rest/v1/tenants?id=eq." + ctx.tenantId + "&select=id,slug,name,phone,address,timezone,currency,min_advance_hours,cancellation_hours,auto_confirm", { method: "PATCH", headers: { ...ownerHeaders(ctx), Prefer: "return=representation" }, body: JSON.stringify(update) });
+    const row = Array.isArray(rows) ? rows[0] : undefined;
+    if (!row) return reply.code(404).send({ code: "TENANT_NOT_FOUND", message: "Barbearia não encontrada." });
+    return reply.header("Cache-Control", "no-store").send({ settings: { name: row.name, slug: row.slug, phone: row.phone, address: row.address, timezone: row.timezone, currency: row.currency, minAdvanceHours: row.min_advance_hours, cancellationHours: row.cancellation_hours, autoConfirm: row.auto_confirm } });
+  } catch (error) { return errorResponse(error, reply); }
+});
+
 app.get("/v1/owner/:slug/appointments", async (request, reply) => {
   const q = request.query as { from?: string; to?: string; status?: string };
   if (!q.from || !q.to || !Number.isFinite(Date.parse(q.from)) || !Number.isFinite(Date.parse(q.to)) || Date.parse(q.from) >= Date.parse(q.to) || Date.parse(q.to) - Date.parse(q.from) > 93 * 86400000)
