@@ -28,7 +28,7 @@ function isCreateAppointment(input: unknown): input is CreateAppointment {
 
 function supabaseConfig() {
   const base = process.env.SUPABASE_URL?.trim().replace(/\/+$/, "");
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  const key = process.env.SUPABASE_PUBLISHABLE_KEY?.trim();
   if (!base || !key) return null;
   try {
     const url = new URL(base);
