@@ -245,6 +245,104 @@ app.get("/v1/owner/:slug/catalog", async (request, reply) => {
   } catch (error) { return errorResponse(error, reply); }
 });
 
+function canManageCatalog(ctx: OwnerContext) { return ctx.role === "owner" || ctx.role === "admin"; }
+
+app.post("/v1/owner/:slug/services", async (request, reply) => {
+  const body = request.body as { name?: unknown; description?: unknown; durationMinutes?: unknown; bufferMinutes?: unknown; price?: unknown; active?: unknown } | null;
+  if (!body || typeof body.name !== "string" || body.name.trim().length < 2 || body.name.trim().length > 100 ||
+      (body.description !== undefined && (typeof body.description !== "string" || body.description.length > 1000)) ||
+      !Number.isInteger(body.durationMinutes) || Number(body.durationMinutes) < 5 || Number(body.durationMinutes) > 480 ||
+      (body.bufferMinutes !== undefined && (!Number.isInteger(body.bufferMinutes) || Number(body.bufferMinutes) < 0 || Number(body.bufferMinutes) > 120)) ||
+      (body.price !== undefined && body.price !== null && (typeof body.price !== "number" || !Number.isFinite(body.price) || body.price < 0 || body.price > 1000000)) ||
+      (body.active !== undefined && typeof body.active !== "boolean")) {
+    return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Confira nome, duração, intervalo e preço do serviço." });
+  }
+  try {
+    const ctx = await ownerContext(request, (request.params as { slug: string }).slug);
+    if (!ctx) return reply.code(401).send({ code: "UNAUTHORIZED", message: "Conta não autorizada para esta barbearia." });
+    if (!canManageCatalog(ctx)) return reply.code(403).send({ code: "FORBIDDEN", message: "Somente proprietários e administradores podem alterar serviços." });
+    const rows = await supabaseFetch("rest/v1/services?select=id,name,description,duration_minutes,buffer_minutes,price,active", {
+      method: "POST", headers: { ...ownerHeaders(ctx), Prefer: "return=representation" },
+      body: JSON.stringify({ tenant_id: ctx.tenantId, name: body.name.trim(), description: typeof body.description === "string" ? body.description.trim() : "", duration_minutes: body.durationMinutes, buffer_minutes: body.bufferMinutes ?? 0, price: body.price ?? null, active: body.active ?? true }),
+    });
+    const service = Array.isArray(rows) ? rows[0] : undefined;
+    return reply.code(201).header("Cache-Control", "no-store").send({ service });
+  } catch (error) { return errorResponse(error, reply); }
+});
+
+app.patch("/v1/owner/:slug/services/:id", async (request, reply) => {
+  const { slug, id } = request.params as { slug: string; id: string };
+  const body = request.body as { name?: unknown; description?: unknown; durationMinutes?: unknown; bufferMinutes?: unknown; price?: unknown; active?: unknown } | null;
+  if (!/^[0-9a-f-]{36}$/i.test(id) || !body || Object.keys(body).length === 0 ||
+      ("name" in body && (typeof body.name !== "string" || body.name.trim().length < 2 || body.name.trim().length > 100)) ||
+      ("description" in body && (typeof body.description !== "string" || body.description.length > 1000)) ||
+      ("durationMinutes" in body && (!Number.isInteger(body.durationMinutes) || Number(body.durationMinutes) < 5 || Number(body.durationMinutes) > 480)) ||
+      ("bufferMinutes" in body && (!Number.isInteger(body.bufferMinutes) || Number(body.bufferMinutes) < 0 || Number(body.bufferMinutes) > 120)) ||
+      ("price" in body && body.price !== null && (typeof body.price !== "number" || !Number.isFinite(body.price) || body.price < 0 || body.price > 1000000)) ||
+      ("active" in body && typeof body.active !== "boolean")) {
+    return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Dados do serviço inválidos." });
+  }
+  try {
+    const ctx = await ownerContext(request, slug);
+    if (!ctx) return reply.code(401).send({ code: "UNAUTHORIZED", message: "Conta não autorizada para esta barbearia." });
+    if (!canManageCatalog(ctx)) return reply.code(403).send({ code: "FORBIDDEN", message: "Somente proprietários e administradores podem alterar serviços." });
+    const update: Record<string, unknown> = {};
+    if (body.name !== undefined) update.name = (body.name as string).trim();
+    if (body.description !== undefined) update.description = (body.description as string).trim();
+    if (body.durationMinutes !== undefined) update.duration_minutes = body.durationMinutes;
+    if (body.bufferMinutes !== undefined) update.buffer_minutes = body.bufferMinutes;
+    if ("price" in body) update.price = body.price;
+    if (body.active !== undefined) update.active = body.active;
+    const rows = await supabaseFetch(`rest/v1/services?id=eq.${id}&tenant_id=eq.${ctx.tenantId}&select=id,name,description,duration_minutes,buffer_minutes,price,active`, {
+      method: "PATCH", headers: { ...ownerHeaders(ctx), Prefer: "return=representation" }, body: JSON.stringify(update),
+    });
+    const service = Array.isArray(rows) ? rows[0] : undefined;
+    if (!service) return reply.code(404).send({ code: "SERVICE_NOT_FOUND", message: "Serviço não encontrado." });
+    return reply.header("Cache-Control", "no-store").send({ service });
+  } catch (error) { return errorResponse(error, reply); }
+});
+
+app.post("/v1/owner/:slug/staff", async (request, reply) => {
+  const body = request.body as { name?: unknown; active?: unknown } | null;
+  if (!body || typeof body.name !== "string" || body.name.trim().length < 2 || body.name.trim().length > 100 ||
+      (body.active !== undefined && typeof body.active !== "boolean"))
+    return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Informe um nome válido para o profissional." });
+  try {
+    const ctx = await ownerContext(request, (request.params as { slug: string }).slug);
+    if (!ctx) return reply.code(401).send({ code: "UNAUTHORIZED", message: "Conta não autorizada para esta barbearia." });
+    if (!canManageCatalog(ctx)) return reply.code(403).send({ code: "FORBIDDEN", message: "Somente proprietários e administradores podem alterar profissionais." });
+    const rows = await supabaseFetch("rest/v1/staff?select=id,name,active", {
+      method: "POST", headers: { ...ownerHeaders(ctx), Prefer: "return=representation" },
+      body: JSON.stringify({ tenant_id: ctx.tenantId, name: body.name.trim(), active: body.active ?? true }),
+    });
+    const staff = Array.isArray(rows) ? rows[0] : undefined;
+    return reply.code(201).header("Cache-Control", "no-store").send({ staff });
+  } catch (error) { return errorResponse(error, reply); }
+});
+
+app.patch("/v1/owner/:slug/staff/:id", async (request, reply) => {
+  const { slug, id } = request.params as { slug: string; id: string };
+  const body = request.body as { name?: unknown; active?: unknown } | null;
+  if (!/^[0-9a-f-]{36}$/i.test(id) || !body || Object.keys(body).length === 0 ||
+      ("name" in body && (typeof body.name !== "string" || body.name.trim().length < 2 || body.name.trim().length > 100)) ||
+      ("active" in body && typeof body.active !== "boolean"))
+    return reply.code(400).send({ code: "VALIDATION_ERROR", message: "Dados do profissional inválidos." });
+  try {
+    const ctx = await ownerContext(request, slug);
+    if (!ctx) return reply.code(401).send({ code: "UNAUTHORIZED", message: "Conta não autorizada para esta barbearia." });
+    if (!canManageCatalog(ctx)) return reply.code(403).send({ code: "FORBIDDEN", message: "Somente proprietários e administradores podem alterar profissionais." });
+    const update: Record<string, unknown> = {};
+    if (body.name !== undefined) update.name = (body.name as string).trim();
+    if (body.active !== undefined) update.active = body.active;
+    const rows = await supabaseFetch(`rest/v1/staff?id=eq.${id}&tenant_id=eq.${ctx.tenantId}&select=id,name,active`, {
+      method: "PATCH", headers: { ...ownerHeaders(ctx), Prefer: "return=representation" }, body: JSON.stringify(update),
+    });
+    const staff = Array.isArray(rows) ? rows[0] : undefined;
+    if (!staff) return reply.code(404).send({ code: "STAFF_NOT_FOUND", message: "Profissional não encontrado." });
+    return reply.header("Cache-Control", "no-store").send({ staff });
+  } catch (error) { return errorResponse(error, reply); }
+});
+
 app.get("/v1/owner/:slug/appointments", async (request, reply) => {
   const q = request.query as { from?: string; to?: string; status?: string };
   if (!q.from || !q.to || !Number.isFinite(Date.parse(q.from)) || !Number.isFinite(Date.parse(q.to)) || Date.parse(q.from) >= Date.parse(q.to) || Date.parse(q.to) - Date.parse(q.from) > 93 * 86400000)
