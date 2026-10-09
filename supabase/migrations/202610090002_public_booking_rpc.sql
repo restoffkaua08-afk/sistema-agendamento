@@ -18,7 +18,7 @@ begin
       select jsonb_agg(jsonb_build_object(
         'id', s.id, 'name', s.name, 'description', s.description,
         'durationMinutes', s.duration_minutes, 'bufferMinutes', s.buffer_minutes, 'price', s.price
-      ) order by s.name)
+      ) order by s.created_at, s.id)
       from public.services s where s.tenant_id = t.id and s.active
     ), '[]'::jsonb),
     'staff', coalesce((
